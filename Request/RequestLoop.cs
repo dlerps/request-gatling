@@ -13,6 +13,8 @@ namespace RequestGatling.Request;
 
 public class RequestLoop : BackgroundService
 {
+    private const int InvalidStatusCode = 0;
+    
     private readonly ILogger<RequestLoop> _logger;
 
     private readonly string _remoteAddress;
@@ -54,10 +56,23 @@ public class RequestLoop : BackgroundService
     private async Task DoRequest(CancellationToken cancellationToken)
     {
         var rolex = Stopwatch.StartNew();
-        var response = await _remoteAddress.GetAsync(cancellationToken);
-        rolex.Stop();
 
-        LogResponse(response, rolex.ElapsedMilliseconds);
+        try
+        {
+            var response = await _remoteAddress.GetAsync(cancellationToken);
+
+            rolex.Stop();
+
+            LogResponse(response, rolex.ElapsedMilliseconds);
+        }
+        catch (FlurlHttpException httpException)
+        {
+            LogFailedRequest(httpException.StatusCode ?? InvalidStatusCode, rolex.ElapsedMilliseconds, httpException);
+        }
+        catch (Exception exception)
+        {
+            LogFailedRequest(InvalidStatusCode, rolex.ElapsedMilliseconds, exception);
+        }
     }
 
     private void LogResponse(IFlurlResponse response, long elapsedMs)
@@ -74,11 +89,16 @@ public class RequestLoop : BackgroundService
             return;
         }
         
-        _logger.LogWarning(
-            "Request to {RemoteAddress} failed ({StatusCode}) in {RequestDuration} ms",
-            _remoteAddress,
-            response.StatusCode,
-            elapsedMs
-        );
+        LogFailedRequest(response.StatusCode, elapsedMs);
+    }
+
+    private void LogFailedRequest(int statusCode, long elapsedMs, Exception exception = null)
+    {
+        const string msg = "Request to {RemoteAddress} failed ({StatusCode}) in {RequestDuration} ms";
+        
+        if (exception == null)
+            _logger.LogWarning(msg, _remoteAddress, statusCode, elapsedMs);
+        else
+            _logger.LogError(exception, msg, _remoteAddress, statusCode, elapsedMs);
     }
 }
